@@ -1,5 +1,7 @@
 "use client";
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
+import { SlidersHorizontal, X } from "lucide-react";
 
 export default function FilterPanel({
   genres = [],
@@ -10,10 +12,11 @@ export default function FilterPanel({
 }) {
   const [open, setOpen] = useState(false);
   const currentYear = useMemo(() => new Date().getFullYear(), []);
-  // live state for min rating display
   const [minRating, setMinRating] = useState(
     initialMinRating !== "" ? Number(initialMinRating) : 0
   );
+
+  const hasActive = Boolean(initialGenre || initialYear || Number(initialMinRating) > 0);
 
   const resetHref = useMemo(() => {
     if (q) {
@@ -23,57 +26,65 @@ export default function FilterPanel({
     return "/";
   }, [q]);
 
-  return (
-    <div className="relative inline-block text-left">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="rounded-full border border-black/10 dark:border-white/20 px-4 py-3 text-sm hover:bg-black/5 dark:hover:bg-white/10 transition"
-        aria-haspopup="dialog"
-        aria-expanded={open}
-      >
-        Filters
-      </button>
+  useEffect(() => {
+    if (!open) return;
 
-      {open && (
-        <div className="fixed inset-0 z-50" role="dialog" aria-modal="true">
-          <div className="absolute inset-0 bg-black/40" onClick={() => setOpen(false)} />
+    function onKeyDown(event) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
 
-          <div className="absolute left-1/2 top-16 -translate-x-1/2 w-[min(92vw,560px)] rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-neutral-900 shadow-xl p-4 sm:p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-base sm:text-lg font-medium">Filters</h3>
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [open]);
+
+  const dialog = open
+    ? createPortal(
+        <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="Filters">
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setOpen(false)}
+          />
+
+          <div className="absolute left-1/2 top-1/2 max-h-[90svh] w-[min(92vw,560px)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto border border-line bg-surface-raised p-5 shadow-[0_40px_90px_-30px_rgb(19_19_22/0.6)] sm:p-7">
+            <div className="mb-6 flex items-center justify-between gap-4">
+              <h3 className="display text-xl">Filters</h3>
               <button
                 type="button"
                 onClick={() => setOpen(false)}
-                className="rounded-full px-3 py-1.5 text-sm hover:bg-black/5 dark:hover:bg-white/10"
                 aria-label="Close filters"
+                className="flex h-8 w-8 items-center justify-center rounded-full border border-line text-ink-dim transition hover:border-line-strong hover:text-ink"
               >
-                Close
+                <X className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />
               </button>
             </div>
 
-            <form action="/" method="GET" className="space-y-4">
-              {q && <input type="hidden" name="q" value={q} />}
+            <form action="/" method="GET" className="space-y-5">
+              {q ? <input type="hidden" name="q" value={q} /> : null}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {/* Genre */}
-                <label className="block text-sm">
-                  <span className="block mb-1 text-neutral-600 dark:text-neutral-300">Genre</span>
+              <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+                <label className="block">
+                  <span className="slate mb-2.5 block text-ink-dim">Genre</span>
                   <select
                     name="genre"
                     defaultValue={initialGenre || ""}
-                    className="w-full rounded-lg border border-black/10 dark:border-white/15 bg-white/60 dark:bg-neutral-900/60 backdrop-blur px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/10 dark:focus:ring-white/20"
+                    className="w-full rounded-full border border-line bg-surface px-4 py-2.5 text-sm text-ink outline-none transition-colors focus:border-accent"
                   >
                     <option value="">Any</option>
                     {genres.map((g) => (
-                      <option key={g.id} value={g.id}>{g.name}</option>
+                      <option key={g.id} value={g.id}>
+                        {g.name}
+                      </option>
                     ))}
                   </select>
                 </label>
 
-                {/* Year */}
-                <label className="block text-sm">
-                  <span className="block mb-1 text-neutral-600 dark:text-neutral-300">Year</span>
+                <label className="block">
+                  <span className="slate mb-2.5 block text-ink-dim">Year</span>
                   <input
                     type="number"
                     name="year"
@@ -81,13 +92,15 @@ export default function FilterPanel({
                     max={currentYear}
                     placeholder="Any"
                     defaultValue={initialYear || ""}
-                    className="w-full rounded-lg border border-black/10 dark:border-white/15 bg-white/60 dark:bg-neutral-900/60 backdrop-blur px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/10 dark:focus:ring-white/20"
+                    className="w-full rounded-full border border-line bg-surface px-4 py-2.5 text-sm text-ink placeholder:text-ink-faint outline-none transition-colors focus:border-accent"
                   />
                 </label>
 
-                {/* Minimum rating */}
-                <label className="block text-sm sm:col-span-2">
-                  <span className="block mb-1 text-neutral-600 dark:text-neutral-300">Minimum rating: <span className="font-medium">{minRating}</span></span>
+                <label className="block sm:col-span-2">
+                  <span className="slate mb-3 flex items-center justify-between text-ink-dim">
+                    <span>Minimum rating</span>
+                    <span className="text-ink">{minRating.toFixed(1)}</span>
+                  </span>
                   <input
                     type="range"
                     name="minRating"
@@ -96,26 +109,49 @@ export default function FilterPanel({
                     step="0.5"
                     value={minRating}
                     onChange={(e) => setMinRating(Number(e.target.value))}
-                    className="w-full"
+                    aria-label="Minimum rating"
                   />
                 </label>
               </div>
 
-              <div className="flex items-center justify-between pt-2">
-                <a href={resetHref} className="text-sm text-neutral-600 dark:text-neutral-300 hover:underline">Reset</a>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="submit"
-                    className="rounded-full bg-black text-white dark:bg-white dark:text-black px-5 py-2.5 text-sm font-medium hover:opacity-90 transition"
-                  >
-                    Apply
-                  </button>
-                </div>
+              <div className="flex items-center justify-between border-t border-line pt-5">
+                <a
+                  href={resetHref}
+                  className="text-sm text-ink-dim underline-offset-4 transition hover:text-ink hover:underline"
+                >
+                  Reset
+                </a>
+                <button
+                  type="submit"
+                  className="rounded-full bg-accent px-6 py-2.5 text-sm font-medium text-[#0a0a0c] transition hover:brightness-105 active:scale-[0.98]"
+                >
+                  Apply
+                </button>
               </div>
             </form>
           </div>
-        </div>
-      )}
+        </div>,
+        document.body
+      )
+    : null;
+
+  return (
+    <div className="relative shrink-0 text-left">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className={`inline-flex items-center gap-2 rounded-full border px-4 py-2.5 text-sm transition active:scale-[0.98] ${
+          hasActive
+            ? "border-accent text-accent-ink"
+            : "border-line text-ink hover:border-line-strong"
+        }`}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+      >
+        <SlidersHorizontal className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />
+        Filters
+      </button>
+      {dialog}
     </div>
   );
 }

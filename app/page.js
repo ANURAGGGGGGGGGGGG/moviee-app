@@ -1,16 +1,18 @@
-import Image from "next/image";
 import Link from "next/link";
-import FilterPanel from "./components/FilterPanel";
-
-const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w500";
+import { X } from "lucide-react";
+import SiteHeader from "./components/SiteHeader";
+import MovieHero from "./components/MovieHero";
+import PosterCard from "./components/PosterCard";
+import SiteFooter from "./components/SiteFooter";
+import { tmdbFetch, describeError } from "../lib/tmdb";
 
 async function getGenres() {
   const apiKey = process.env.TMDB_API_KEY;
   if (!apiKey) return [];
   try {
-    const res = await fetch(
+    const res = await tmdbFetch(
       `https://api.themoviedb.org/3/genre/movie/list?api_key=${apiKey}&language=en-US`,
-      { next: { revalidate: 86400 } } // revalidate once a day
+      { next: { revalidate: 86400 } }
     );
     if (!res.ok) return [];
     const data = await res.json();
@@ -24,7 +26,6 @@ function applyClientFilters(list, { genreId, year, minRating }) {
   let out = list;
   if (genreId) out = out.filter((m) => (m.genre_ids || []).includes(Number(genreId)));
   if (year) out = out.filter((m) => (m.release_date || "").startsWith(String(year)));
-  // Only apply rating filter when greater than 0
   if (typeof minRating === "number" && !Number.isNaN(minRating) && minRating > 0) {
     out = out.filter((m) => (m.vote_average || 0) >= minRating);
   }
@@ -43,47 +44,57 @@ async function getMovies({ query, genreId, year, minRating }) {
 
   try {
     if (query) {
-      // 1) search path always for query
       const url = `https://api.themoviedb.org/3/search/movie?api_key=${apiKey}&language=en-US&query=${encodeURIComponent(
         query
       )}&page=1&include_adult=false`;
-      const res = await fetch(url, { next: { revalidate: 60 } });
+      const res = await tmdbFetch(url, { next: { revalidate: 60 } });
       if (!res.ok) throw new Error("Failed to fetch search results");
       const data = await res.json();
 
-      // refine with client filters when combined with query
       const filtered = applyClientFilters(data.results ?? [], { genreId, year, minRating });
       return { results: filtered };
     }
 
     if (hasFilters) {
-      // 2) filters only -> discover
-      const params = new URLSearchParams({ language: "en-US", sort_by: "popularity.desc", page: "1", include_adult: "false" });
+      const params = new URLSearchParams({
+        language: "en-US",
+        sort_by: "popularity.desc",
+        page: "1",
+        include_adult: "false",
+      });
       if (genreId) params.set("with_genres", String(genreId));
       if (year) params.set("primary_release_year", String(year));
       if (typeof minRating === "number" && !Number.isNaN(minRating) && minRating > 0) {
         params.set("vote_average.gte", String(minRating));
       }
       const url = `https://api.themoviedb.org/3/discover/movie?api_key=${apiKey}&${params.toString()}`;
-      const res = await fetch(url, { next: { revalidate: 60 } });
+      const res = await tmdbFetch(url, { next: { revalidate: 60 } });
       if (!res.ok) throw new Error("Failed to fetch discover movies");
       const data = await res.json();
       return { results: data.results ?? [] };
     }
 
-    // 3) default popular
     const url = `https://api.themoviedb.org/3/movie/popular?api_key=${apiKey}&language=en-US&page=1`;
     const res = await fetch(url, { next: { revalidate: 60 } });
     if (!res.ok) throw new Error("Failed to fetch popular movies");
     const data = await res.json();
     return { results: data.results ?? [] };
   } catch (e) {
-    return { results: [], error: e.message };
+    return { results: [], error: describeError(e) };
   }
 }
 
+function buildHref(base, overrides) {
+  const params = new URLSearchParams();
+  const merged = { ...base, ...overrides };
+  for (const [key, value] of Object.entries(merged)) {
+    if (value) params.set(key, String(value));
+  }
+  const query = params.toString();
+  return query ? `/?${query}` : "/";
+}
+
 export default async function Home({ searchParams }) {
-  // Next.js 15: searchParams is async; await it and read safely whether it's an object or URLSearchParams-like
   const sp = await searchParams;
   const getParam = (key) => {
     if (!sp) return "";
@@ -103,7 +114,6 @@ export default async function Home({ searchParams }) {
 
   const genreId = genreParam ? Number(genreParam) : null;
   const year = yearParam ? Number(yearParam) : null;
-  // parse minRating: treat 0 or empty as not set
   const minRating = minRatingParam && Number(minRatingParam) > 0 ? Number(minRatingParam) : null;
 
   const [{ results: movies, error }, genres] = await Promise.all([
@@ -111,159 +121,130 @@ export default async function Home({ searchParams }) {
     getGenres(),
   ]);
 
+  const genreNames = Object.fromEntries((genres || []).map((g) => [g.id, g.name]));
+  const filterState = { q, genre: genreParam, year: yearParam, minRating: minRatingParam };
+
+  const chips = [];
+  if (genreId) chips.push({ key: "genre", label: genreNames[genreId] || "Genre" });
+  if (year) chips.push({ key: "year", label: String(year) });
+  if (minRating) chips.push({ key: "minRating", label: `${minRating}+ rating` });
+
+  const showHero = !q && chips.length === 0 && !error && Boolean(movies[0]?.backdrop_path);
+  const gridMovies = showHero ? movies.slice(1) : movies;
+  const Heading = showHero ? "h2" : "h1";
+
   return (
-    <div className="min-h-screen w-full p-6 sm:p-10">
-      <header className="mb-6 sm:mb-8">
-        <div className="flex items-center justify-between gap-4 mb-6">
-          <div>
-            <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">
-              {q ? `Search results` : `Popular Movies`}
-            </h1>
-            <p className="text-sm text-neutral-500 dark:text-neutral-400">
-              {q ? (
-                <span>
-                  Showing results for <span className="font-medium">&quot;{q}&quot;</span>
-                </span>
-              ) : (
-                "Screenly"
-              )}
-            </p>
-          </div>
-          {/* Screenly pill with TMDb attribution popover */}
-          <details className="relative hidden sm:block">
-            <summary
-              className="inline-flex items-center rounded-full border border-black/10 dark:border-white/20 px-4 py-2 text-sm hover:bg-black/5 dark:hover:bg-white/10 transition cursor-pointer list-none"
-              aria-label="Screenly (open for TMDb attribution)"
-            >
-              <span>Documentation</span>
-            </summary>
-            {/* Popover */}
-            <div className="absolute right-0 mt-2 w-[min(90vw,360px)] rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-neutral-900 shadow-lg p-3 text-xs text-neutral-700 dark:text-neutral-300 z-10">
-              <p className="flex flex-wrap items-center gap-2">
-                <span>This Movie App uses the TMDb API but is not endorsed or certified by TMDb.</span>
-                <a
-                  className="underline hover:no-underline"
-                  href="https://developer.themoviedb.org/docs"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  API docs
-                </a>
-                <span>•</span>
-                <a
-                  className="underline hover:no-underline"
-                  href="https://www.themoviedb.org/"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  TMDb site
-                </a>
-                <span>•</span>
-                <span>Thanks to TMDb for their open API.</span>
+    <div className="min-h-[100dvh]">
+      <SiteHeader
+        q={q}
+        genres={genres}
+        genreParam={genreParam}
+        yearParam={yearParam}
+        minRatingParam={minRatingParam}
+      />
+
+      {showHero ? <MovieHero movie={movies[0]} genreNames={genreNames} /> : null}
+
+      <main className="mx-auto w-full max-w-[1400px] px-4 pb-24 pt-10 sm:px-6 sm:pt-14 lg:px-10">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-8 gap-y-2">
+          <Heading className="display text-3xl sm:text-4xl lg:text-5xl">
+            {q ? "Search results" : "Popular Movies"}
+          </Heading>
+          {!error && movies.length > 0 ? (
+            <span className="slate text-ink-faint">
+              {movies.length} {movies.length === 1 ? "film" : "films"}
+            </span>
+          ) : null}
+        </div>
+
+        {error ? (
+          <div className="mt-8 border border-accent/50 bg-surface-raised p-5 sm:p-6">
+            <p className="display text-xl">Could not load movies</p>
+            <p className="mt-2 text-sm text-ink-dim">{error}</p>
+            {!process.env.TMDB_API_KEY ? (
+              <p className="mt-3 text-sm text-ink-dim">
+                Create a .env.local file at the project root with TMDB_API_KEY=YOUR_KEY
               </p>
-            </div>
-          </details>
-        </div>
-        {/* documentation from screenly */}
-        <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
-          {/* Search bar */}
-          <form action="/" method="GET" className="w-full sm:w-[520px]">
-            {/* Preserve existing filters when searching */}
-            {genreParam ? <input type="hidden" name="genre" value={genreParam} /> : null}
-            {yearParam ? <input type="hidden" name="year" value={yearParam} /> : null}
-            {minRatingParam ? <input type="hidden" name="minRating" value={minRatingParam} /> : null}
-            <div className="relative">
-              <input
-                type="search"
-                name="q"
-                defaultValue={q}
-                placeholder="Search movies..."
-                className="w-full rounded-full border border-black/10 dark:border-white/15 bg-white/60 dark:bg-neutral-900/60 backdrop-blur pl-4 pr-24 py-3 text-sm outline-none focus:ring-2 focus:ring-black/10 dark:focus:ring-white/20"
-                aria-label="Search movies"
-              />
-              <button
-                type="submit"
-                className="absolute right-1 top-1 bottom-1 rounded-full px-4 text-sm font-medium bg-black text-white dark:bg-white dark:text-black hover:opacity-90 transition"
-                aria-label="Search"
+            ) : null}
+            <div className="mt-5 flex flex-wrap gap-3">
+              <Link
+                href={buildHref(filterState, {})}
+                className="inline-flex items-center rounded-full bg-accent px-5 py-2.5 text-sm font-medium text-[#0a0a0c] transition hover:brightness-105 active:scale-[0.98]"
               >
-                Search
-              </button>
+                Try again
+              </Link>
+              <Link
+                href="/"
+                className="inline-flex items-center rounded-full border border-line px-5 py-2.5 text-sm text-ink transition hover:border-accent active:scale-[0.98]"
+              >
+                Reset
+              </Link>
             </div>
-          </form>
+          </div>
+        ) : null}
 
-          {/* Filters button opens modal */}
-          <FilterPanel
-            genres={genres}
-            q={q}
-            initialGenre={genreParam}
-            initialYear={yearParam}
-            initialMinRating={minRatingParam}
-          />
-        </div>
-        {/* Removed separate Filters container below since it's now inline with search */}
-         
-       </header>
-
-      {error ? (
-        <div className="mb-6 rounded-lg border border-red-300/50 bg-red-50 dark:bg-red-950/20 p-4 text-red-700 dark:text-red-300">
-          <p className="font-medium">Could not load movies</p>
-          <p className="text-sm opacity-80">{error}</p>
-          {!process.env.TMDB_API_KEY && (
-            <p className="mt-2 text-sm opacity-80">
-              Create a .env.local file at the project root with TMDB_API_KEY=YOUR_KEY
-            </p>
-          )}
-        </div>
-      ) : null}
-
-      <main>
-        {movies.length === 0 ? (
-          <p className="text-neutral-500 dark:text-neutral-400">
-            {q ? (
-              <span>
-                No results found for <span className="font-medium">&quot;{q}&quot;</span>.
-              </span>
-            ) : (
-              "No movies found."
-            )}
+        {q ? (
+          <p className="mt-3 text-sm text-ink-dim">
+            Showing results for{" "}
+            <span className="font-medium text-ink">&quot;{q}&quot;</span>
           </p>
-        ) : (
-          <ul className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-6">
-            {movies.map((m) => {
-              const poster = m.poster_path ? `${TMDB_IMAGE_BASE}${m.poster_path}` : null;
-              return (
-                <li key={m.id} className="group rounded-xl overflow-hidden border border-black/10 dark:border-white/10 bg-white dark:bg-neutral-900 shadow-sm hover:shadow-md transition-shadow focus-within:ring-2 focus-within:ring-black/10 dark:focus-within:ring-white/20">
-                  <Link href={`/movie/${m.id}`} className="block">
-                    <div className="relative aspect-[2/3] bg-neutral-100 dark:bg-neutral-800">
-                      {poster ? (
-                        <Image
-                          src={poster}
-                          alt={m.title || m.name || "Movie poster"}
-                          fill
-                          className="object-cover"
-                          sizes="(max-width: 768px) 50vw, (max-width: 1200px) 33vw, 200px"
-                          priority={false}
-                        />
-                      ) : (
-                        <div className="absolute inset-0 flex items-center justify-center text-neutral-400 text-sm">No Image</div>
-                      )}
-                    </div>
-                    <div className="p-3">
-                      <h3 className="text-sm font-medium leading-tight line-clamp-2 min-h-[2.5rem] group-hover:underline">{m.title || m.name}</h3>
-                      <div className="mt-2 flex items-center justify-between text-xs text-neutral-500">
-                        <span>{m.release_date ? new Date(m.release_date).getFullYear() : "—"}</span>
-                        <span className="inline-flex items-center gap-1">
-                          ⭐ <span>{m.vote_average?.toFixed?.(1) ?? "N/A"}</span>
-                        </span>
-                      </div>
-                    </div>
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-        )}
+        ) : null}
+
+        {chips.length > 0 ? (
+          <div className="mt-5 flex flex-wrap gap-2">
+            {chips.map((chip) => (
+              <Link
+                key={chip.key}
+                href={buildHref(filterState, { [chip.key]: "" })}
+                aria-label={`Remove ${chip.label} filter`}
+                className="group inline-flex items-center gap-2 rounded-full border border-line bg-surface-raised py-1.5 pl-3.5 pr-2.5 text-xs text-ink-dim transition hover:border-accent hover:text-ink"
+              >
+                {chip.label}
+                <X
+                  className="h-3.5 w-3.5 text-ink-faint transition group-hover:text-accent-ink"
+                  strokeWidth={1.5}
+                  aria-hidden="true"
+                />
+              </Link>
+            ))}
+            <Link
+              href={buildHref({ q }, { genre: "", year: "", minRating: "" })}
+              className="inline-flex items-center rounded-full px-3 py-1.5 text-xs text-ink-faint underline-offset-4 transition hover:text-ink hover:underline"
+            >
+              Clear all
+            </Link>
+          </div>
+        ) : null}
+
+        {!error ? (
+          <div className="mt-9">
+          {movies.length === 0 && !error ? (
+            <div className="border border-line bg-surface-raised px-6 py-16 text-center">
+              <p className="display text-2xl sm:text-3xl">No films found</p>
+              <p className="mx-auto mt-3 max-w-[46ch] text-sm leading-relaxed text-ink-dim">
+                {q
+                  ? `Nothing matched "${q}". Try another title, or remove a filter.`
+                  : "Nothing matched these filters. Try another genre, year, or rating."}
+              </p>
+              <Link
+                href={q ? buildHref({}, { q: "" }) : "/"}
+                className="mt-7 inline-flex items-center rounded-full border border-line px-5 py-2.5 text-sm text-ink transition hover:border-accent active:scale-[0.98]"
+              >
+                {q ? "Clear search" : "Reset filters"}
+              </Link>
+            </div>
+          ) : (
+            <ul className="grid grid-cols-2 gap-x-4 gap-y-9 sm:grid-cols-3 sm:gap-x-5 md:grid-cols-4 xl:grid-cols-5">
+              {gridMovies.map((m, i) => (
+                <PosterCard key={m.id} movie={m} index={i} />
+              ))}
+            </ul>
+            )}
+          </div>
+        ) : null}
       </main>
+
+      <SiteFooter />
     </div>
   );
 }
